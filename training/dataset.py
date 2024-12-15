@@ -279,10 +279,14 @@ class VideoDatasetWithResizing(VideoDataset):
             nearest_frame_bucket = min(
                 self.frame_buckets, key=lambda x: abs(x - min(video_num_frames, self.max_num_frames))
             )
+            # print({x: abs(x - min(video_num_frames, self.max_num_frames)) for x in self.frame_buckets})
+            # print(video_num_frames, path.as_posix(), nearest_frame_bucket)
 
             frame_indices = list(range(0, video_num_frames, video_num_frames // nearest_frame_bucket))
+            # print("frame_indices", frame_indices)
 
             frames = video_reader.get_batch(frame_indices)
+            # print("len_frames", len(frames))
             frames = frames[:nearest_frame_bucket].float()
             frames = frames.permute(0, 3, 1, 2).contiguous()
 
