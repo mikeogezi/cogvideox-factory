@@ -801,6 +801,8 @@ def main(args):
 
         if accelerator.is_main_process:
             if args.validation_prompt is not None and (epoch + 1) % args.validation_epochs == 0:
+                if os.path.exists(args.validation_prompt):
+                    args.validation_prompt = open(args.validation_prompt).read()
                 accelerator.print("===== Memory before validation =====")
                 print_memory(accelerator.device)
                 torch.cuda.synchronize(accelerator.device)
