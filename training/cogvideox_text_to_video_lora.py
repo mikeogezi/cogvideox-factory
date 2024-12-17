@@ -162,7 +162,7 @@ def log_validation(
     is_final_validation: bool = False,
 ):
     logger.info(
-        f"Running validation... \n Generating {args.num_validation_videos} videos with prompt: {pipeline_args['prompt']}."
+        f"Running validation with epoch={epoch}... \n Generating {args.num_validation_videos} videos with prompt: {pipeline_args['prompt']}."
     )
 
     pipe = pipe.to(accelerator.device)
