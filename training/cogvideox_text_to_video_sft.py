@@ -221,6 +221,11 @@ def main(args):
             " Please use `huggingface-cli login` to authenticate with the Hub."
         )
 
+    if args.validation_epochs and args.validation_steps:
+        raise ValueError(
+            "Only one of --validation_epochs or --validation_steps should be set."
+        )
+
     if torch.backends.mps.is_available() and args.mixed_precision == "bf16":
         # due to pytorch#99272, MPS does not yet support bfloat16.
         raise ValueError(
@@ -607,6 +612,57 @@ def main(args):
 
     alphas_cumprod = scheduler.alphas_cumprod.to(accelerator.device, dtype=torch.float32)
 
+    def do_validation(args, accelerator, transformer, scheduler, model_config, weight_dtype, global_step, epoch):
+        if os.path.exists(args.validation_prompt):
+            args.validation_prompt = open(args.validation_prompt).read()
+        accelerator.print("===== Memory before validation =====")
+        print_memory(accelerator.device)
+        torch.cuda.synchronize(accelerator.device)
+
+        pipe = CogVideoXPipeline.from_pretrained(
+            args.pretrained_model_name_or_path,
+            transformer=unwrap_model(accelerator, transformer),
+            scheduler=scheduler,
+            revision=args.revision,
+            variant=args.variant,
+            torch_dtype=weight_dtype,
+        )
+
+        if args.enable_slicing:
+            pipe.vae.enable_slicing()
+        if args.enable_tiling:
+            pipe.vae.enable_tiling()
+        if args.enable_model_cpu_offload:
+            pipe.enable_model_cpu_offload()
+
+        validation_prompts = args.validation_prompt.split(args.validation_prompt_separator)
+        for validation_prompt in validation_prompts:
+            pipeline_args = {
+                "prompt": validation_prompt,
+                "guidance_scale": args.guidance_scale,
+                "use_dynamic_cfg": args.use_dynamic_cfg,
+                "height": args.height,
+                "width": args.width,
+                "max_sequence_length": model_config.max_text_seq_length,
+            }
+
+            log_validation(
+                pipe=pipe,
+                args=args,
+                accelerator=accelerator,
+                pipeline_args=pipeline_args,
+                epoch=epoch,
+            )
+
+        accelerator.print("===== Memory after validation =====")
+        print_memory(accelerator.device)
+        reset_memory(accelerator.device)
+
+        del pipe
+        gc.collect()
+        torch.cuda.empty_cache()
+        torch.cuda.synchronize(accelerator.device)
+
     for epoch in range(first_epoch, args.num_train_epochs):
         transformer.train()
 
@@ -751,6 +807,9 @@ def main(args):
                         save_path = os.path.join(args.output_dir, f"checkpoint-{global_step}")
                         accelerator.save_state(save_path)
                         logger.info(f"Saved state to {save_path}")
+                    
+                    if args.validation_prompt is not None and args.validation_steps is not None and global_step % args.validation_steps == 0:
+                        do_validation(args, accelerator, transformer, scheduler, model_config, weight_dtype, global_step, epoch)
 
             last_lr = lr_scheduler.get_last_lr()[0] if lr_scheduler is not None else args.learning_rate
             logs.update(
@@ -767,56 +826,7 @@ def main(args):
 
         if accelerator.is_main_process:
             if args.validation_prompt is not None and (epoch + 1) % args.validation_epochs == 0:
-                if os.path.exists(args.validation_prompt):
-                    args.validation_prompt = open(args.validation_prompt).read()
-                accelerator.print("===== Memory before validation =====")
-                print_memory(accelerator.device)
-                torch.cuda.synchronize(accelerator.device)
-
-                pipe = CogVideoXPipeline.from_pretrained(
-                    args.pretrained_model_name_or_path,
-                    transformer=unwrap_model(accelerator, transformer),
-                    scheduler=scheduler,
-                    revision=args.revision,
-                    variant=args.variant,
-                    torch_dtype=weight_dtype,
-                )
-
-                if args.enable_slicing:
-                    pipe.vae.enable_slicing()
-                if args.enable_tiling:
-                    pipe.vae.enable_tiling()
-                if args.enable_model_cpu_offload:
-                    pipe.enable_model_cpu_offload()
-
-                validation_prompts = args.validation_prompt.split(args.validation_prompt_separator)
-                for validation_prompt in validation_prompts:
-                    pipeline_args = {
-                        "prompt": validation_prompt,
-                        "guidance_scale": args.guidance_scale,
-                        "use_dynamic_cfg": args.use_dynamic_cfg,
-                        "height": args.height,
-                        "width": args.width,
-                        "max_sequence_length": model_config.max_text_seq_length,
-                    }
-
-                    log_validation(
-                        accelerator=accelerator,
-                        pipe=pipe,
-                        args=args,
-                        pipeline_args=pipeline_args,
-                        epoch=epoch,
-                        is_final_validation=False,
-                    )
-
-                accelerator.print("===== Memory after validation =====")
-                print_memory(accelerator.device)
-                reset_memory(accelerator.device)
-
-                del pipe
-                gc.collect()
-                torch.cuda.empty_cache()
-                torch.cuda.synchronize(accelerator.device)
+                do_validation(args, accelerator, transformer, scheduler, model_config, weight_dtype, global_step, epoch)
 
     accelerator.wait_for_everyone()
 
