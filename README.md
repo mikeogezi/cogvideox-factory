@@ -10,6 +10,11 @@ FineTrainers is a work-in-progress library to support training of video models. 
 </tr>
 </table>
 
+## News
+
+- 🔥 **2024-12-20**: Support for LoRA finetuning of [Hunyuan Video](https://huggingface.co/tencent/HunyuanVideo) added! We would like to thank @SHYuanBest for his work on a training script [here](https://github.com/huggingface/diffusers/pull/10254).
+- 🔥 **2024-12-18**: Support for LoRA finetuning of [LTX Video](https://huggingface.co/Lightricks/LTX-Video) added!
+
 ## Quickstart
 
 Clone the repository and make sure the requirements are installed: `pip install -r requirements.txt` and install diffusers from source by `pip install git+https://github.com/huggingface/diffusers`.
@@ -40,13 +45,12 @@ export NCCL_P2P_DISABLE=1
 export TORCH_NCCL_ENABLE_MONITORING=0
 export FINETRAINERS_LOG_LEVEL=DEBUG
 
-# Modify this based on the number of GPUs available
 GPU_IDS="0,1"
 
-DATA_ROOT="/path/to/dataset/cakify"
+DATA_ROOT="/raid/aryan/video-dataset-disney"
 CAPTION_COLUMN="prompts.txt"
 VIDEO_COLUMN="videos.txt"
-OUTPUT_DIR="/path/to/output/directory/ltx-video/ltxv_cakify"
+OUTPUT_DIR="/path/to/output/directory/ltx-video/ltxv_disney"
 
 # Model arguments
 model_cmd="--model_name ltx_video \
@@ -57,7 +61,7 @@ dataset_cmd="--data_root $DATA_ROOT \
   --video_column $VIDEO_COLUMN \
   --caption_column $CAPTION_COLUMN \
   --id_token BW_STYLE \
-  --video_resolution_buckets 17x512x768 49x512x768 61x512x768 129x512x768 \
+  --video_resolution_buckets 49x512x768 \
   --caption_dropout_p 0.05"
 
 # Dataloader arguments
@@ -71,7 +75,7 @@ training_cmd="--training_type lora \
   --seed 42 \
   --mixed_precision bf16 \
   --batch_size 1 \
-  --train_steps 2000 \
+  --train_steps 1200 \
   --rank 128 \
   --lora_alpha 128 \
   --target_modules to_q to_k to_v to_out.0 \
@@ -84,8 +88,8 @@ training_cmd="--training_type lora \
 
 # Optimizer arguments
 optimizer_cmd="--optimizer adamw \
-  --lr 1e-5 \
-  --lr_scheduler constant \
+  --lr 3e-5 \
+  --lr_scheduler constant_with_warmup \
   --lr_warmup_steps 100 \
   --lr_num_cycles 1 \
   --beta1 0.9 \
@@ -95,7 +99,7 @@ optimizer_cmd="--optimizer adamw \
   --max_grad_norm 1.0"
 
 # Validation arguments
-validation_cmd="--validation_prompts \"BW_STYLE A black and white animated scene unfolds with an anthropomorphic goat surrounded by musical notes and symbols, suggesting a playful environment. Mickey Mouse appears, leaning forward in curiosity as the goat remains still. The goat then engages with Mickey, who bends down to converse or react. The dynamics shift as Mickey grabs the goat, potentially in surprise or playfulness, amidst a minimalistic background. The scene captures the evolving relationship between the two characters in a whimsical, animated setting, emphasizing their interactions and emotions@@@49x512x768:::BW_STYLE A black and white animated scene unfolds with an anthropomorphic goat surrounded by musical notes and symbols, suggesting a playful environment. Mickey Mouse appears, leaning forward in curiosity as the goat remains still. The goat then engages with Mickey, who bends down to converse or react. The dynamics shift as Mickey grabs the goat, potentially in surprise or playfulness, amidst a minimalistic background. The scene captures the evolving relationship between the two characters in a whimsical, animated setting, emphasizing their interactions and emotions@@@129x512x768:::BW_STYLE A panda, dressed in a small, red jacket and a tiny hat, sits on a wooden stool in a serene bamboo forest. The panda's fluffy paws strum a miniature acoustic guitar, producing soft, melodic tunes. Nearby, a few other pandas gather, watching curiously and some clapping in rhythm. Sunlight filters through the tall bamboo, casting a gentle glow on the scene. The panda's face is expressive, showing concentration and joy as it plays. The background includes a small, flowing stream and vibrant green foliage, enhancing the peaceful and magical atmosphere of this unique musical performance@@@49x512x768\" \
+validation_cmd="--validation_prompts \"afkx A black and white animated scene unfolds with an anthropomorphic goat surrounded by musical notes and symbols, suggesting a playful environment. Mickey Mouse appears, leaning forward in curiosity as the goat remains still. The goat then engages with Mickey, who bends down to converse or react. The dynamics shift as Mickey grabs the goat, potentially in surprise or playfulness, amidst a minimalistic background. The scene captures the evolving relationship between the two characters in a whimsical, animated setting, emphasizing their interactions and emotions.@@@49x512x768:::A woman with long brown hair and light skin smiles at another woman with long blonde hair. The woman with brown hair wears a black jacket and has a small, barely noticeable mole on her right cheek. The camera angle is a close-up, focused on the woman with brown hair's face. The lighting is warm and natural, likely from the setting sun, casting a soft glow on the scene. The scene appears to be real-life footage@@@49x512x768\" \
   --num_validation_videos 1 \
   --validation_steps 100"
 
@@ -133,15 +137,257 @@ pipe = LTXPipeline.from_pretrained(
     "Lightricks/LTX-Video", torch_dtype=torch.bfloat16
 ).to("cuda")
 + pipe.load_lora_weights("my-awesome-name/my-awesome-lora", adapter_name="ltxv-lora")
-+ pipe.set_adapters(["ltxv-lora"], [1.0])
++ pipe.set_adapters(["ltxv-lora"], [0.75])
 
 video = pipe("<my-awesome-prompt>").frames[0]
 export_to_video(video, "output.mp4", fps=8)
 ```
 
+### Memory Usage
+
+LoRA with rank 128, batch size 1, gradient checkpointing, optimizer adamw, `49x512x768` resolution, **without precomputation**:
+
+```
+Training configuration: {
+    "trainable parameters": 117440512,
+    "total samples": 69,
+    "train epochs": 1,
+    "train steps": 10,
+    "batches per device": 1,
+    "total batches observed per epoch": 69,
+    "train batch size": 1,
+    "gradient accumulation steps": 1
+}
+```
+
+| stage                   | memory_allocated | max_memory_reserved |
+|:-----------------------:|:----------------:|:-------------------:|
+| before training start   | 13.486           | 13.879              |
+| before validation start | 14.146           | 17.623              |
+| after validation end    | 14.146           | 17.623              |
+| after epoch 1           | 14.146           | 17.623              |
+| after training end      | 4.461            | 17.623              |
+
+Note: requires about `18` GB of VRAM without precomputation.
+
+LoRA with rank 128, batch size 1, gradient checkpointing, optimizer adamw, `49x512x768` resolution, **with precomputation**:
+
+```
+Training configuration: {
+    "trainable parameters": 117440512,
+    "total samples": 1,
+    "train epochs": 10,
+    "train steps": 10,
+    "batches per device": 1,
+    "total batches observed per epoch": 1,
+    "train batch size": 1,
+    "gradient accumulation steps": 1
+}
+```
+
+| stage                         | memory_allocated | max_memory_reserved |
+|:-----------------------------:|:----------------:|:-------------------:|
+| after precomputing conditions | 8.88             | 8.920               |
+| after precomputing latents    | 9.684            | 11.613              |
+| before training start         | 3.809            | 10.010              |
+| after epoch 1                 | 4.26             | 10.916              |
+| before validation start       | 4.26             | 10.916              |
+| after validation end          | 13.924           | 17.262              |
+| after training end            | 4.26             | 14.314              |
+
+Note: requires about `17.5` GB of VRAM with precomputation. If validation is not performed, the memory usage is reduced to `11` GB.
+
+</details>
+
+<details>
+<summary> Hunyuan Video </summary>
+
+### Training:
+
+```bash
+#!/bin/bash
+
+# export TORCH_LOGS="+dynamo,recompiles,graph_breaks"
+# export TORCHDYNAMO_VERBOSE=1
+export WANDB_MODE="offline"
+export NCCL_P2P_DISABLE=1
+export TORCH_NCCL_ENABLE_MONITORING=0
+export FINETRAINERS_LOG_LEVEL=DEBUG
+
+GPU_IDS="0,1,2,3,4,5,6,7"
+
+DATA_ROOT="/path/to/dataset"
+CAPTION_COLUMN="prompts.txt"
+VIDEO_COLUMN="videos.txt"
+OUTPUT_DIR="/path/to/models/hunyuan-video/hunyuan-video-loras/hunyuan-video_cakify_500_3e-5_constant_with_warmup"
+
+# Model arguments
+model_cmd="--model_name hunyuan_video \
+  --pretrained_model_name_or_path hunyuanvideo-community/HunyuanVideo"
+
+# Dataset arguments
+dataset_cmd="--data_root $DATA_ROOT \
+  --video_column $VIDEO_COLUMN \
+  --caption_column $CAPTION_COLUMN \
+  --id_token afkx \
+  --video_resolution_buckets 17x512x768 49x512x768 61x512x768 129x512x768 \
+  --caption_dropout_p 0.05"
+
+# Dataloader arguments
+dataloader_cmd="--dataloader_num_workers 0"
+
+# Diffusion arguments
+diffusion_cmd=""
+
+# Training arguments
+training_cmd="--training_type lora \
+  --seed 42 \
+  --mixed_precision bf16 \
+  --batch_size 1 \
+  --train_steps 500 \
+  --rank 128 \
+  --lora_alpha 128 \
+  --target_modules to_q to_k to_v to_out.0 \
+  --gradient_accumulation_steps 1 \
+  --gradient_checkpointing \
+  --checkpointing_steps 500 \
+  --checkpointing_limit 2 \
+  --enable_slicing \
+  --enable_tiling"
+
+# Optimizer arguments
+optimizer_cmd="--optimizer adamw \
+  --lr 2e-5 \
+  --lr_scheduler constant_with_warmup \
+  --lr_warmup_steps 100 \
+  --lr_num_cycles 1 \
+  --beta1 0.9 \
+  --beta2 0.95 \
+  --weight_decay 1e-4 \
+  --epsilon 1e-8 \
+  --max_grad_norm 1.0"
+
+# Validation arguments
+validation_cmd="--validation_prompts \"afkx A baker carefully cuts a green bell pepper cake on a white plate against a bright yellow background, followed by a strawberry cake with a similar slice of cake being cut before the interior of the bell pepper cake is revealed with the surrounding cake-to-object sequence.@@@49x512x768:::afkx A cake shaped like a Nutella container is carefully sliced, revealing a light interior, amidst a Nutella-themed setup, showcasing deliberate cutting and preserved details for an appetizing dessert presentation on a white base with accompanying jello and cutlery, highlighting culinary skills and creative cake designs.@@@49x512x768:::afkx A cake shaped like a Nutella container is carefully sliced, revealing a light interior, amidst a Nutella-themed setup, showcasing deliberate cutting and preserved details for an appetizing dessert presentation on a white base with accompanying jello and cutlery, highlighting culinary skills and creative cake designs.@@@61x512x768:::afkx A vibrant orange cake disguised as a Nike packaging box sits on a dark surface, meticulous in its detail and design, complete with a white swoosh and 'NIKE' logo. A person's hands, holding a knife, hover over the cake, ready to make a precise cut, amidst a simple and clean background.@@@61x512x768:::afkx A vibrant orange cake disguised as a Nike packaging box sits on a dark surface, meticulous in its detail and design, complete with a white swoosh and 'NIKE' logo. A person's hands, holding a knife, hover over the cake, ready to make a precise cut, amidst a simple and clean background.@@@97x512x768:::afkx A vibrant orange cake disguised as a Nike packaging box sits on a dark surface, meticulous in its detail and design, complete with a white swoosh and 'NIKE' logo. A person's hands, holding a knife, hover over the cake, ready to make a precise cut, amidst a simple and clean background.@@@129x512x768:::A person with gloved hands carefully cuts a cake shaped like a Skittles bottle, beginning with a precise incision at the lid, followed by careful sequential cuts around the neck, eventually detaching the lid from the body, revealing the chocolate interior of the cake while showcasing the layered design's detail.@@@61x512x768:::afkx A woman with long brown hair and light skin smiles at another woman with long blonde hair. The woman with brown hair wears a black jacket and has a small, barely noticeable mole on her right cheek. The camera angle is a close-up, focused on the woman with brown hair's face. The lighting is warm and natural, likely from the setting sun, casting a soft glow on the scene. The scene appears to be real-life footage@@@61x512x768\" \
+  --num_validation_videos 1 \
+  --validation_steps 100"
+
+# Miscellaneous arguments
+miscellaneous_cmd="--tracker_name finetrainers-hunyuan-video \
+  --output_dir $OUTPUT_DIR \
+  --nccl_timeout 1800 \
+  --report_to wandb"
+
+cmd="accelerate launch --config_file accelerate_configs/uncompiled_8.yaml --gpu_ids $GPU_IDS train.py \
+  $model_cmd \
+  $dataset_cmd \
+  $dataloader_cmd \
+  $diffusion_cmd \
+  $training_cmd \
+  $optimizer_cmd \
+  $validation_cmd \
+  $miscellaneous_cmd"
+
+echo "Running command: $cmd"
+eval $cmd
+echo -ne "-------------------- Finished executing script --------------------\n\n"
+```
+
+### Inference:
+
+Assuming your LoRA is saved and pushed to the HF Hub, and named `my-awesome-name/my-awesome-lora`, we can now use the finetuned model for inference:
+
+```py
+import torch
+from diffusers import HunyuanVideoPipeline
+
+import torch
+from diffusers import HunyuanVideoPipeline, HunyuanVideoTransformer3DModel
+from diffusers.utils import export_to_video
+
+model_id = "hunyuanvideo-community/HunyuanVideo"
+transformer = HunyuanVideoTransformer3DModel.from_pretrained(
+    model_id, subfolder="transformer", torch_dtype=torch.bfloat16
+)
+pipe = HunyuanVideoPipeline.from_pretrained(model_id, transformer=transformer, torch_dtype=torch.float16)
+pipe.load_lora_weights("my-awesome-name/my-awesome-lora", adapter_name="hunyuanvideo-lora")
+pipe.set_adapters(["hunyuanvideo-lora"], [0.6])
+pipe.vae.enable_tiling()
+pipe.to("cuda")
+
+output = pipe(
+    prompt="A cat walks on the grass, realistic",
+    height=320,
+    width=512,
+    num_frames=61,
+    num_inference_steps=30,
+).frames[0]
+export_to_video(output, "output.mp4", fps=15)
+```
+
+### Memory Usage
+
+LoRA with rank 128, batch size 1, gradient checkpointing, optimizer adamw, `49x512x768` resolutions, **without precomputation**:
+
+```
+Training configuration: {
+    "trainable parameters": 163577856,
+    "total samples": 69,
+    "train epochs": 1,
+    "train steps": 10,
+    "batches per device": 1,
+    "total batches observed per epoch": 69,
+    "train batch size": 1,
+    "gradient accumulation steps": 1
+}
+```
+
+| stage                   | memory_allocated | max_memory_reserved |
+|:-----------------------:|:----------------:|:-------------------:|
+| before training start   | 38.889           | 39.020              |
+| before validation start | 39.747           | 56.266              |
+| after validation end    | 39.748           | 58.385              |
+| after epoch 1           | 39.748           | 40.910              |
+| after training end      | 25.288           | 40.910              |
+
+Note: requires about `59` GB of VRAM without precomputation.
+
+LoRA with rank 128, batch size 1, gradient checkpointing, optimizer adamw, `49x512x768` resolutions, **with precomputation**:
+
+```
+Training configuration: {
+    "trainable parameters": 163577856,
+    "total samples": 1,
+    "train epochs": 10,
+    "train steps": 10,
+    "batches per device": 1,
+    "total batches observed per epoch": 1,
+    "train batch size": 1,
+    "gradient accumulation steps": 1
+}
+```
+
+| stage                         | memory_allocated | max_memory_reserved |
+|:-----------------------------:|:----------------:|:-------------------:|
+| after precomputing conditions | 14.232           | 14.461              |
+| after precomputing latents    | 14.717           | 17.244              |
+| before training start         | 24.195           | 26.039              |
+| after epoch 1                 | 24.83            | 42.387              |
+| before validation start       | 24.842           | 42.387              |
+| after validation end          | 39.558           | 46.947              |
+| after training end            | 24.842           | 41.039              |
+
+Note: requires about `47` GB of VRAM with precomputation. If validation is not performed, the memory usage is reduced to about `42` GB.
+
 </details>
 
 If you would like to use a custom dataset, refer to the dataset preparation guide [here](./assets/dataset.md).
+
+> [!NOTE]
+> To lower memory requirements:
+> - Pass `--precompute_conditions` when launching training.
+> - Pass `--gradient_checkpointing` when launching training.
+> - Do not perform validation/testing. This saves a significant amount of memory, which can be used to focus solely on training if you're on smaller VRAM GPUs.
 
 ## Memory requirements
 
