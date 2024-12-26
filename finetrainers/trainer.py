@@ -560,6 +560,8 @@ class Trainer:
             validation_artifacts = self.model_config["validation"](
                 pipeline=pipeline,
                 prompt=prompt,
+                # TODO: Adeuqtely externalize this
+                negative_prompt="worst quality, inconsistent motion, blurry, jittery, distorted",
                 image=image,
                 video=video,
                 height=height,
